@@ -1,36 +1,26 @@
 import React, { useState } from 'react';
 import {
-  SafeAreaView,
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  FlatList,
-  StyleSheet,
-  KeyboardAvoidingView,
-  Platform,
+  View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, ActivityIndicator, Alert
 } from 'react-native';
+import * as FileSystem from 'expo-file-system';
+import { Audio } from 'expo-av';
 import axios from 'axios';
-import * as Animatable from 'react-native-animatable';
-import { Ionicons } from '@expo/vector-icons';
+import { Buffer } from 'buffer';
+
+global.Buffer = Buffer;
 
 export default function App() {
-  const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [messages, setMessages] = useState([]);
+  const [recording, setRecording] = useState(null);
+  const [loadingTTS, setLoadingTTS] = useState(false);
 
-  const sendMessage = async () => {
+  const handleSend = async () => {
     if (!input.trim()) return;
 
-    const userMessage = {
-      id: Date.now().toString(),
-      text: input,
-      sender: 'user',
-    };
-
+    const userMessage = { role: 'user', content: input };
     setMessages((prev) => [...prev, userMessage]);
     setInput('');
-    setLoading(true);
 
     try {
       const res = await axios.post('http://128.100.7.63:5000/chat', {
@@ -38,140 +28,136 @@ export default function App() {
         message: input,
       });
 
-      const botMessage = {
-        id: Date.now().toString(),
-        text: res.data.response,
-        sender: 'assistant',
-      };
-
+      const botMessage = { role: 'assistant', content: res.data.response };
       setMessages((prev) => [...prev, botMessage]);
-    } catch (error) {
-      const errorMsg = {
-        id: Date.now().toString(),
-        text: "Oops! Couldn't reach the server. Try again.",
-        sender: 'assistant',
-      };
-      setMessages((prev) => [...prev, errorMsg]);
+    } catch (err) {
+      console.error('Chat API Error:', err);
     }
-
-    setLoading(false);
   };
 
-  const renderMessage = ({ item }) => (
-    <View
-      style={[
-        styles.messageBubble,
-        item.sender === 'user' ? styles.userBubble : styles.botBubble,
-      ]}
-    >
-      <Text style={styles.messageText}>{item.text}</Text>
+  const startRecording = async () => {
+    try {
+      await Audio.requestPermissionsAsync();
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+      setRecording(recording);
+    } catch (err) {
+      console.error('Recording Error:', err);
+    }
+  };
+
+  const stopRecording = async () => {
+    try {
+      await recording.stopAndUnloadAsync();
+      const uri = recording.getURI();
+      setRecording(null);
+
+      const formData = new FormData();
+      formData.append('file', {
+        uri,
+        type: 'audio/m4a',
+        name: 'audio.m4a',
+      });
+
+      const response = await fetch('http://128.100.7.63:5000/transcribe', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        body: formData,
+      });
+
+      const data = await response.json();
+      if (data.text) {
+        setInput(data.text);
+      } else {
+        alert('Transcription failed.');
+      }
+    } catch (err) {
+      console.error('STT Error:', err);
+      alert('Speech-to-text failed.');
+    }
+  };
+
+  const renderItem = ({ item }) => (
+    <View style={[styles.message, item.role === 'user' ? styles.user : styles.bot]}>
+      <Text style={styles.messageText}>{item.content}</Text>
     </View>
   );
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <FlatList
         data={messages}
-        keyExtractor={(item) => item.id}
-        renderItem={renderMessage}
-        contentContainerStyle={styles.chat}
+        keyExtractor={(_, index) => index.toString()}
+        renderItem={renderItem}
+        contentContainerStyle={{ padding: 20 }}
       />
-
-      {loading && (
-        <Animatable.View
-          animation="pulse"
-          iterationCount="infinite"
-          style={styles.typingBubble}
-        >
-          <Text style={styles.typingText}>🤖 Typing...</Text>
-        </Animatable.View>
-      )}
-
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.inputContainer}
-      >
-        <TouchableOpacity style={styles.micButton}>
-          <Ionicons name="mic" size={24} color="#555" />
-        </TouchableOpacity>
+      <View style={styles.inputContainer}>
         <TextInput
           style={styles.input}
-          placeholder="Type something..."
           value={input}
           onChangeText={setInput}
-          onSubmitEditing={sendMessage}
+          placeholder="Type or speak your message..."
         />
-        <TouchableOpacity onPress={sendMessage} style={styles.sendButton}>
-          <Ionicons name="send" size={22} color="#fff" />
+        <TouchableOpacity onPress={handleSend} style={styles.button}>
+          <Text>Send</Text>
         </TouchableOpacity>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+        <TouchableOpacity
+          onPress={recording ? stopRecording : startRecording}
+          style={styles.button}
+        >
+          <Text>{recording ? '🛑' : '🎙️'}</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f9fafe',
-  },
-  chat: {
-    padding: 10,
-    paddingBottom: 80,
-  },
-  messageBubble: {
-    padding: 12,
-    marginVertical: 6,
-    maxWidth: '75%',
-    borderRadius: 20,
-  },
-  userBubble: {
-    alignSelf: 'flex-end',
-    backgroundColor: '#d0f0fd',
-  },
-  botBubble: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#e0e0e0',
-  },
-  messageText: {
-    fontSize: 16,
-  },
+  container: { flex: 1, backgroundColor: '#fff' },
   inputContainer: {
     flexDirection: 'row',
-    position: 'absolute',
-    bottom: 10,
-    left: 10,
-    right: 10,
-    backgroundColor: '#fff',
-    padding: 8,
-    borderRadius: 25,
-    alignItems: 'center',
-    elevation: 3,
+    padding: 10,
+    borderTopWidth: 1,
+    borderColor: '#ccc',
   },
   input: {
     flex: 1,
-    paddingHorizontal: 12,
-    fontSize: 16,
-  },
-  sendButton: {
-    backgroundColor: '#2978b5',
-    padding: 10,
+    borderWidth: 1,
+    borderColor: '#ccc',
     borderRadius: 20,
-    marginLeft: 6,
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    marginRight: 10,
   },
-  micButton: {
-    padding: 8,
-    marginRight: 6,
-  },
-  typingBubble: {
-    alignSelf: 'flex-start',
+  button: {
     backgroundColor: '#eee',
-    padding: 10,
-    marginLeft: 10,
     borderRadius: 20,
-    marginBottom: 10,
+    padding: 10,
+    marginLeft: 5,
   },
-  typingText: {
-    fontSize: 14,
-    color: '#555',
+  message: {
+    marginBottom: 12,
+    padding: 10,
+    borderRadius: 10,
+    maxWidth: '80%',
+  },
+  user: {
+    backgroundColor: '#dcf8c6',
+    alignSelf: 'flex-end',
+  },
+  bot: {
+    backgroundColor: '#eee',
+    alignSelf: 'flex-start',
+  },
+  messageText: {
+    fontSize: 16,
   },
 });
