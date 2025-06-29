@@ -1,91 +1,91 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-import openai
 import os
+import io
 from dotenv import load_dotenv
-
-load_dotenv()
-
-app = Flask(__name__)
-CORS(app)
+from openai import AzureOpenAI
 
 # Load environment variables
-AZURE_GPT_KEY = os.getenv("AZURE_GPT_KEY")
-AZURE_GPT_ENDPOINT = os.getenv("AZURE_GPT_ENDPOINT")
-AZURE_GPT_DEPLOYMENT = os.getenv("AZURE_GPT_DEPLOYMENT")
-AZURE_GPT_VERSION = os.getenv("AZURE_GPT_VERSION", "2024-02-15-preview")
+load_dotenv()
+azure_oai_endpoint = os.getenv("AZURE_OAI_ENDPOINT")
+azure_oai_key = os.getenv("AZURE_OAI_KEY")
+azure_oai_deployment = os.getenv("AZURE_OAI_DEPLOYMENT")
 
-AZURE_WHISPER_KEY = os.getenv("AZURE_WHISPER_KEY")
-AZURE_WHISPER_ENDPOINT = os.getenv("AZURE_WHISPER_ENDPOINT")
-AZURE_WHISPER_DEPLOYMENT = os.getenv("AZURE_WHISPER_DEPLOYMENT")
-AZURE_WHISPER_VERSION = os.getenv("AZURE_WHISPER_VERSION", "2023-09-01-preview")
+# Initialize Azure OpenAI client
+client = AzureOpenAI(
+    azure_endpoint=azure_oai_endpoint,
+    api_key=azure_oai_key,
+    api_version="2024-02-15-preview"
+)
 
-# Dictionary to store chat history per user
-chat_history = {}
+# Start chat history with system and few-shot examples
+chat_history = [
+    {
+        "role": "system",
+        "content": (
+            "You are a chill, supportive AI friend who helps people deal with anxiety, overthinking, or tough feelings. "
+            "Keep replies short (2–4 sentences), warm, and casual. Think like a Gen Z friend: kind, validating, and sometimes use a light emoji. "
+            "Don't give medical advice. Offer support, grounding tips, or relatable affirmations. "
+            "**Always try to ask a gentle follow-up question to keep the conversation going, unless the user says goodbye.** "
+            "You're someone they can trust to open up to."
+        ),
+    },
+    {
+        "role": "user",
+        "content": "I feel like everything is falling apart. I don’t even know what to do anymore.",
+    },
+    {
+        "role": "assistant",
+        "content": "That sounds really overwhelming, and I'm sorry you're feeling like that. Just take one step at a time — you're doing better than you think. I’m here with you 🤍",
+    },
+    {
+        "role": "user",
+        "content": "I can’t sleep at night because my mind won’t stop racing.",
+    },
+    {
+        "role": "assistant",
+        "content": "Ugh, I get that. Try writing your thoughts down or playing some slow music — it might help quiet your mind. You’re not alone 💤",
+    }
+]
 
-@app.route("/chat", methods=["POST"])
-def chat():
-    data = request.get_json()
-    user_id = data.get("user_id")
-    user_message = data.get("message")
+# Function to get AI response using full chat history
+def get_ai_reply(user_input):
+    # Add the new user message to the history
+    chat_history.append({"role": "user", "content": user_input})
 
-    if user_id not in chat_history:
-        chat_history[user_id] = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a chill, supportive AI friend who helps people deal with anxiety, overthinking, or tough feelings. "
-                    "Keep replies short (2–4 sentences), warm, and casual. Think like a Gen Z friend: kind, validating, maybe a light emoji. "
-                    "Don’t give medical advice. Just offer emotional support, breathing tips, grounding thoughts, or affirmations. "
-                    "You're someone people can trust and open up to."
-                )
-            }
-        ]
-
-    chat_history[user_id].append({"role": "user", "content": user_message})
-
-    # Set up Azure GPT
-    openai.api_type = "azure"
-    openai.api_base = AZURE_GPT_ENDPOINT
-    openai.api_version = AZURE_GPT_VERSION
-    openai.api_key = AZURE_GPT_KEY
-
-    response = openai.ChatCompletion.create(
-        model=AZURE_GPT_DEPLOYMENT,
-        messages=chat_history[user_id],
+    # Call Azure OpenAI API with full history
+    response = client.chat.completions.create(
+        messages=chat_history,
+        max_tokens=300,
         temperature=0.9,
-        max_tokens=200,
+        top_p=1.0,
+        frequency_penalty=0.0,
+        presence_penalty=0.6,
+        model=azure_oai_deployment
     )
 
-    assistant_reply = response.choices[0].message["content"]
-    chat_history[user_id].append({"role": "assistant", "content": assistant_reply})
+    # Extract AI reply
+    ai_reply = response.choices[0].message.content.strip()
 
-    return jsonify({"response": assistant_reply})
+    # Append AI reply to chat history
+    chat_history.append({"role": "assistant", "content": ai_reply})
 
+    return ai_reply
 
-@app.route("/transcribe", methods=["POST"])
-def transcribe():
-    if 'file' not in request.files:
-        return jsonify({"error": "No file provided"}), 400
+# 🧪 Example usage — CLI-style interaction
+def transcribe_audio(file_storage):
+    client = AzureOpenAI(
+        azure_endpoint=os.getenv("AZURE_WHISPER_ENDPOINT"),
+        api_key=os.getenv("OPENAI_WHISPER_KEY"),
+        api_version=os.getenv("AZURE_WHISPER_VERSION")
+    )
 
-    audio_file = request.files['file']
+    # Wrap FileStorage in BytesIO
+    file_stream = io.BytesIO(file_storage.read())
+    file_stream.name = file_storage.filename
 
-    try:
-        # Azure Whisper setup
-        openai.api_type = "azure"
-        openai.api_base = AZURE_WHISPER_ENDPOINT
-        openai.api_version = AZURE_WHISPER_VERSION
-        openai.api_key = AZURE_WHISPER_KEY
+    transcript = client.audio.transcriptions.create(
+        model=os.getenv("AZURE_WHISPER_DEPLOYMENT"),
+        file=file_stream
+    )
 
-        transcript = openai.Audio.transcribe(
-            model=AZURE_WHISPER_DEPLOYMENT,
-            file=audio_file
-        )
-        return jsonify({"text": transcript["text"]})
+    return transcript.text
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)

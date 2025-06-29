@@ -23,7 +23,7 @@ export default function App() {
     setInput('');
 
     try {
-      const res = await axios.post('http://128.100.7.63:5000/chat', {
+      const res = await axios.post('http://128.100.7.149:5000/chat', {
         user_id: 'shikhar123',
         message: input,
       });
@@ -65,7 +65,7 @@ export default function App() {
         name: 'audio.m4a',
       });
 
-      const response = await fetch('http://128.100.7.63:5000/transcribe', {
+      const response = await fetch('http://128.100.7.149:5000/transcribe', {
         method: 'POST',
         headers: {
           'Content-Type': 'multipart/form-data',
